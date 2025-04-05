@@ -19,14 +19,14 @@
 
 转换结果
 
->[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:29.26,0:00:32.71,Default,,0,0,0,,{\k39}故{\k39}事{\k45}的{\k92}小{\k37}黄{\k50}花{\k42}
-Dialogue: 0,0:00:32.71,0:00:36.24,Default,,0,0,0,,{\k45}从{\k38}出{\k54}生{\k48}那{\k18}年{\k27}就{\k39}飘{\k43}着{\k41}
-Dialogue: 0,0:00:36.24,0:00:39.75,Default,,0,0,0,,{\k46}童{\k43}年{\k44}的{\k86}荡{\k39}秋{\k54}千{\k40}
-Dialogue: 0,0:00:39.75,0:00:42.91,Default,,0,0,0,,{\k87}随{\k22}记{\k25}忆{\k21}一{\k23}直{\k21}晃{\k24}到{\k41}现{\k31}在{\k23}
-Dialogue: 0,0:00:42.91,0:00:45.93,Default,,0,0,0,,{\k31}Re {\k44}So {\k44}So {\k45}Si {\k46}Do {\k44}Si {\k26}La {\k22}
-Dialogue: 0,0:00:45.93,0:00:49.87,Default,,0,0,0,,{\k18}So {\k24}La {\k38}Si {\k43}Si {\k43}Si {\k54}Si {\k18}La {\k20}Si {\k42}La {\k50}So {\k42}
+>[Events]  
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text  
+Dialogue: 0,0:00:29.26,0:00:32.71,Default,,0,0,0,,{\k39}故{\k39}事{\k45}的{\k92}小{\k37}黄{\k50}花{\k42}  
+Dialogue: 0,0:00:32.71,0:00:36.24,Default,,0,0,0,,{\k45}从{\k38}出{\k54}生{\k48}那{\k18}年{\k27}就{\k39}飘{\k43}着{\k41}  
+Dialogue: 0,0:00:36.24,0:00:39.75,Default,,0,0,0,,{\k46}童{\k43}年{\k44}的{\k86}荡{\k39}秋{\k54}千{\k40}  
+Dialogue: 0,0:00:39.75,0:00:42.91,Default,,0,0,0,,{\k87}随{\k22}记{\k25}忆{\k21}一{\k23}直{\k21}晃{\k24}到{\k41}现{\k31}在{\k23}  
+Dialogue: 0,0:00:42.91,0:00:45.93,Default,,0,0,0,,{\k31}Re {\k44}So {\k44}So {\k45}Si {\k46}Do {\k44}Si {\k26}La {\k22}  
+Dialogue: 0,0:00:45.93,0:00:49.87,Default,,0,0,0,,{\k18}So {\k24}La {\k38}Si {\k43}Si {\k43}Si {\k54}Si {\k18}La {\k20}Si {\k42}La {\k50}So {\k42}  
 
 ## 注意事项
 - ASS 字幕格式的时间戳只能精确到 10 毫秒，但 QRC 的时间戳可以精确到 1 毫秒。将 QRC 转换为 ASS 时，QRC 的时间戳会被四舍五入，这会导致转换后的 ASS 文件时间轴与原始 QRC 文件存在偏差。建议使用 [Aegisub](https://github.com/TypesettingTools/Aegisub) 校对时间轴。
