@@ -31,6 +31,34 @@ const QRC_GAP_THRESHOLD_MS: usize = 200;
 
 const PROGRESS_BAR_LENGTH: usize = 20;
 
+const RESET: &str = "\x1b[0m";
+const RED: &str = "\x1b[31m";
+const GREEN: &str = "\x1b[32m";
+const YELLOW: &str = "\x1b[33m";
+const CYAN: &str = "\x1b[36m";
+
+macro_rules! log_info {
+    ($($arg:tt)*) => {
+        println!("{}[提示]{} {}", CYAN, RESET, format!($($arg)*));
+    }
+}
+macro_rules! log_success {
+    ($($arg:tt)*) => {
+        println!("{}[成功]{} {}", GREEN, RESET, format!($($arg)*));
+    }
+}
+macro_rules! log_warn {
+    ($($arg:tt)*) => {
+        eprintln!("{}[警告]{} {}", YELLOW, RESET, format!($($arg)*));
+    }
+}
+macro_rules! log_error {
+    ($($arg:tt)*) => {
+        eprintln!("{}[错误]{} {}", RED, RESET, format!($($arg)*));
+    }
+}
+
+
 #[derive(Debug)]
 enum ConversionError {
     Io(io::Error),
@@ -101,7 +129,7 @@ fn main() {
     } else if args.len() == 1 {
         let input_path = PathBuf::from(&args[0]);
         if !input_path.exists() {
-            eprintln!("{}", FILE_NOT_FOUND_ERROR);
+            log_error!("{}", FILE_NOT_FOUND_ERROR); 
             return;
         }
         let extension = input_path.extension()
@@ -113,26 +141,34 @@ fn main() {
         } else if extension == &QRC_EXTENSION[1..] {
             (convert_qrc_to_ass as fn(&Path, &Path) -> Result<(), ConversionError>, QRC_EXTENSION, ASS_EXTENSION)
         } else {
-            eprintln!("无法根据文件后缀判断转换方向，请使用正确的 .ass 或 .qrc 文件");
-            return;
+            log_error!("无法根据文件后缀判断转换方向，请使用正确的 .ass 或 .qrc 文件");
+            eprintln!("");
+            log_info!("按下任意键退出...");
+                let mut dummy = String::new();
+                let _ = io::stdin().read_line(&mut dummy);
+                return;
         };
         let output_path = auto_output_path(&input_path, output_ext);
         if let Err(e) = conversion_action(&input_path, &output_path) {
-            eprintln!("{}", CONVERSION_ERROR_MSG.replace("{}", &e.to_string()));
+            log_error!("{}", CONVERSION_ERROR_MSG.replace("{}", &e.to_string()));
         }
     } else if args.len() == 3 {
         let direction = args[0].to_lowercase();
         let input_path = PathBuf::from(&args[1]);
         let output_path = PathBuf::from(&args[2]);
         if !input_path.exists() {
-            eprintln!("{}", FILE_NOT_FOUND_ERROR);
+            log_error!("{}", FILE_NOT_FOUND_ERROR);
             return;
         }
         let conversion_action = match direction.as_str() {
             "ass2qrc" | "2q" => convert_ass_to_qrc as fn(&Path, &Path) -> Result<(), ConversionError>,
             "qrc2ass" | "2a" => convert_qrc_to_ass as fn(&Path, &Path) -> Result<(), ConversionError>,
             _ => {
-                eprintln!("转换方向参数无效，请使用 'ass2qrc'(或2q) 或 'qrc2ass'(或2a)");
+                log_error!("转换方向参数无效，请使用 'ass2qrc'(或2q) 或 'qrc2ass'(或2a)");
+                eprintln!("");
+                log_info!("按下任意键退出...");
+                let mut dummy = String::new();
+                let _ = io::stdin().read_line(&mut dummy);
                 return;
             }
         };
@@ -158,19 +194,21 @@ fn auto_output_path(input_path: &Path, output_ext: &str) -> PathBuf {
 }
 
 fn interactive_mode() {
+    log_info!("直接将文件拖到程序上可自动转换");
     loop {
-        println!("提示：直接将文件拖到程序上可自动转换。");
         println!("");
-        println!("请选择操作：{}. ASS -> QRC， {}. QRC -> ASS", ASS_TO_QRC_CHOICE, QRC_TO_ASS_CHOICE);
+        println!("请选择操作：");
+        println!("{}. ASS -> QRC",ASS_TO_QRC_CHOICE);
+        println!("{}. QRC -> ASS",QRC_TO_ASS_CHOICE);
         let mut choice = String::new();
         if io::stdin().read_line(&mut choice).is_err() {
-             eprintln!("{}", READ_INPUT_ERROR); 
+             log_error!("{}", READ_INPUT_ERROR); 
              continue;
         }
         let choice = choice.trim();
 
         if choice.is_empty() {
-            println!("{}", INVALID_CHOICE_MESSAGE);
+            log_error!("{}", INVALID_CHOICE_MESSAGE); 
             continue;
         }
 
@@ -178,13 +216,13 @@ fn interactive_mode() {
             ASS_TO_QRC_CHOICE => process_conversion(convert_ass_to_qrc, ASS_EXTENSION, QRC_EXTENSION),
             QRC_TO_ASS_CHOICE => process_conversion(convert_qrc_to_ass, QRC_EXTENSION, ASS_EXTENSION),
             _ => {
-                println!("{}", INVALID_CHOICE_MESSAGE);
+                log_error!("{}", INVALID_CHOICE_MESSAGE); 
                 continue; 
             }
         };
 
         if let Err(e) = result {
-             eprintln!("{}", CONVERSION_ERROR_MSG.replace("{}", &e.to_string()));
+             log_error!("{}", CONVERSION_ERROR_MSG.replace("{}", &e.to_string()));
         }
     }
 }
@@ -201,7 +239,7 @@ fn read_file_path(prompt_template: &str, extension: &str) -> Result<PathBuf, Con
         let path_str = path_str.trim();
 
         if path_str.is_empty() {
-            println!("{}", EMPTY_FILE_PATH_ERROR.replace("{}", extension));
+            log_error!("{}", EMPTY_FILE_PATH_ERROR.replace("{}", extension)); 
             continue;
         }
 
@@ -218,7 +256,7 @@ fn process_conversion(
     let output_path = read_file_path(OUTPUT_FILE_PATH_PROMPT, output_extension)?;
 
     if !input_path.exists() {
-        eprintln!("{}", FILE_NOT_FOUND_ERROR);
+        log_error!("{}", FILE_NOT_FOUND_ERROR);
          return Err(ConversionError::UserInputError("输入文件不存在".to_string()));
     }
 
@@ -240,53 +278,89 @@ fn convert_ass_to_qrc(ass_path: &Path, qrc_path: &Path) -> Result<(), Conversion
     let metadata = file.metadata()?;
     let total_bytes = metadata.len() as usize;
     let mut processed_bytes = 0;
+    let mut warning = false;
 
     let reader = BufReader::new(file);
     let mut writer = BufWriter::new(File::create(qrc_path)?);
 
-    for (line_num, line_result) in reader.lines().enumerate() {
+    let mut after_format = false;
+    let mut dialogue_count = 0;
+
+    for line_result in reader.lines() {
         let line = line_result?;
-        let line_bytes = line.as_bytes().len() + if cfg!(windows) { 2 } else { 1 }; 
+
+        let line_bytes = line.as_bytes().len() + if cfg!(windows) { 2 } else { 1 };
         processed_bytes += line_bytes;
 
+        if !after_format {
+            if line.trim_start().starts_with("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text") {
+                after_format = true;
+            }
+            continue;
+        }
+
         if line.starts_with("Dialogue:") {
+            dialogue_count += 1;
+
             if let Some(caps) = DIALOGUE_REGEX.captures(&line) {
-                let start_time_str = caps.get(1).ok_or_else(|| ConversionError::InvalidFormat(format!("行 {} 无法捕获开始时间", line_num + 1)))?.as_str();
-                let end_time_str = caps.get(2).ok_or_else(|| ConversionError::InvalidFormat(format!("行 {} 无法捕获结束时间", line_num + 1)))?.as_str();
+                let start_time_str = caps.get(1).unwrap().as_str();
+                let end_time_str   = caps.get(2).unwrap().as_str();
 
                 let start_ms = time_to_milliseconds(start_time_str)
-                                .map_err(|e| ConversionError::InvalidFormat(format!("行 {} 开始时间格式错误: {}", line_num + 1, e)))?;
+                    .map_err(|e| ConversionError::InvalidFormat(format!("第 {} 条对话 开始时间格式错误: {}", dialogue_count, e)))?;
                 let end_ms = time_to_milliseconds(end_time_str)
-                                .map_err(|e| ConversionError::InvalidFormat(format!("行 {} 结束时间格式错误: {}", line_num + 1, e)))?;
+                    .map_err(|e| ConversionError::InvalidFormat(format!("第 {} 条对话 结束时间格式错误: {}", dialogue_count, e)))?;
                 let duration_ms = end_ms.saturating_sub(start_ms);
 
-                write!(writer, "[{},{}]", start_ms, duration_ms)?;
-
-                let mut current_word_start_ms = start_ms;
-
-                let text_part_start_index = caps.get(0).unwrap().end();
-                let ass_text_content = &line[text_part_start_index..];
-
-                for k_cap in K_TAG_REGEX.captures_iter(ass_text_content) {
-                    let k_value_str = k_cap.get(1).ok_or_else(|| ConversionError::InvalidFormat(format!("行 {} \\k 值捕获失败", line_num + 1)))?.as_str();
-                    let text = k_cap.get(2).ok_or_else(|| ConversionError::InvalidFormat(format!("行 {} \\k 文本捕获失败", line_num + 1)))?.as_str();
-
-                    let k_value_cs: usize = k_value_str.parse()?; 
-                    let word_duration_ms = k_value_cs * K_TAG_MULTIPLIER;
-
-                     write!(writer, "{}({},{})", text, current_word_start_ms, word_duration_ms)?;
-
-                    current_word_start_ms += word_duration_ms;
+                let text_part_start = caps.get(0).unwrap().end();
+                let ass_text = &line[text_part_start..];
+                let mut segments = Vec::new();
+                let mut sum_k_ms = 0;
+                for k_cap in K_TAG_REGEX.captures_iter(ass_text) {
+                    let k_cs: usize = k_cap.get(1).unwrap().as_str().parse()?;
+                    let seg_text = k_cap.get(2).unwrap().as_str().to_string();
+                    let seg_ms = k_cs * K_TAG_MULTIPLIER;
+                    sum_k_ms += seg_ms;
+                    segments.push((seg_text, seg_ms));
                 }
 
-                writeln!(writer)?; 
+                if sum_k_ms != duration_ms {
+                    log_warn!(
+                        "第 {} 行 k 值总和 {} ms 与持续时间 {} ms 不匹配",
+                        dialogue_count,
+                        sum_k_ms,
+                        duration_ms
+                    );
+                    warning = true;
+                }
+
+                write!(writer, "[{},{}]", start_ms, duration_ms)?;
+                let mut current_ms = start_ms;
+                for (seg_text, seg_ms) in segments {
+                    write!(writer, "{}({},{})", seg_text, current_ms, seg_ms)?;
+                    current_ms += seg_ms;
+                }
+                writeln!(writer)?;
             }
         }
         display_progress_bar(processed_bytes.min(total_bytes), total_bytes);
     }
 
-    display_progress_bar(total_bytes, total_bytes); 
-    println!("\n{}", ASS_TO_QRC_COMPLETE);
+    display_progress_bar(total_bytes, total_bytes);
+
+    writer.flush().map_err(ConversionError::Io)?;
+    println!("");
+    log_success!("{}", ASS_TO_QRC_COMPLETE);
+
+    if warning {
+        eprintln!("");
+        log_warn!("一行或多行文字总时间与行持续时间不匹配，建议修改原文件后再次转换");
+        eprintln!("");
+        log_info!("按下任意键退出...");
+        let mut dummy = String::new();
+        io::stdin().read_line(&mut dummy).map_err(ConversionError::Io)?;
+    }
+
     Ok(())
 }
 
@@ -379,7 +453,8 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
     }
 
     display_progress_bar(total_bytes, total_bytes);
-    println!("\n{}", QRC_TO_ASS_COMPLETE);
+    println!("");
+    log_success!("{}", QRC_TO_ASS_COMPLETE);
     Ok(())
 }
 
