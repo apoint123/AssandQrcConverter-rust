@@ -155,6 +155,7 @@ fn main() {
                 if let Err(e) = convert_lys_to_ass(&input_path, &output_path) {
                     log_error!("{}", CONVERSION_ERROR_MSG.replace("{}", &e.to_string()));
                 }
+                return; 
         }
         
         if extension == ASS_EXTENSION[1..] {
