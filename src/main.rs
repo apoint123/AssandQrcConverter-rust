@@ -493,12 +493,12 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
                         let gap_ms = current_word_start_ms - last_word_end_ms;
                         let gap_k_value = (gap_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER;
                         if gap_k_value > 0 {
-                            ass_text.push_str(&format!("{{\\k{}}}", gap_k_value));
+                            ass_text.push_str(&format!("{{\\kf{}}}", gap_k_value));
                         }
                     }
 
                     let word_k_value = (current_word_duration_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER; 
-                    ass_text.push_str(&format!("{{\\k{}}}{}", word_k_value, word));
+                    ass_text.push_str(&format!("{{\\kf{}}}{}", word_k_value, word));
 
                     last_word_end_ms = current_word_start_ms + current_word_duration_ms;
                     
@@ -511,11 +511,11 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
                 let final_gap_ms = header_end_ms - last_word_end_ms;
                 let final_gap_k_value = (final_gap_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER;
                 if final_gap_k_value > 0 {
-                    ass_text.push_str(&format!("{{\\k{}}}", final_gap_k_value));
+                    ass_text.push_str(&format!("{{\\kf{}}}", final_gap_k_value));
                 }
             }
 
-            let ass_text = ass_text.replace("{\\k0}", "");
+            let ass_text = ass_text.replace("{\\kf0}", "");
             if !ass_text.is_empty() {
                 writeln!(
                     writer,
@@ -759,7 +759,7 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<(), Conversion
                     end_ms = word_start_ms + word_duration_ms;
                     
                     let k_value = (word_duration_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER;
-                    ass_text.push_str(&format!("{{\\k{}}}{}", k_value, word));
+                    ass_text.push_str(&format!("{{\\kf{}}}{}", k_value, word));
                 }
             }
             
