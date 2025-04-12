@@ -42,6 +42,17 @@ const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 const CYAN: &str = "\x1b[36m";
 
+// Lyricify Syllable 属性
+const LYS_PROPERTY_UNSET: usize = 0;
+const LYS_PROPERTY_LEFT: usize = 1;
+const LYS_PROPERTY_RIGHT: usize = 2;
+//const LYS_PROPERTY_NO_BACK_UNSET: usize = 3;
+//const LYS_PROPERTY_NO_BACK_LEFT: usize = 4;
+//const LYS_PROPERTY_NO_BACK_RIGHT: usize = 5;
+const LYS_PROPERTY_BACK_UNSET: usize = 6;
+const LYS_PROPERTY_BACK_LEFT: usize = 7;
+const LYS_PROPERTY_BACK_RIGHT: usize = 8;
+
 macro_rules! log_info {
     ($($arg:tt)*) => {
         println!("\n{}[提示]{} {}", CYAN, RESET, format!($($arg)*));
@@ -70,7 +81,6 @@ enum ConversionError {
     Regex(regex::Error),
     ParseInt(ParseIntError),
     InvalidFormat(String), 
-    UserInputError(String),
 }
 
 impl fmt::Display for ConversionError {
@@ -80,7 +90,6 @@ impl fmt::Display for ConversionError {
             ConversionError::Regex(e) => write!(f, "正则表达式错误: {}", e),
             ConversionError::ParseInt(e) => write!(f, "数字解析错误: {}", e),
             ConversionError::InvalidFormat(msg) => write!(f, "格式无效: {}", msg),
-            ConversionError::UserInputError(msg) => write!(f, "用户输入错误: {}", msg),
         }
     }
 }
@@ -115,25 +124,25 @@ impl From<ParseIntError> for ConversionError {
 }
 
 static DIALOGUE_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"Dialogue:\s*\d+,(\d+:\d+:\d+\.\d+),(\d+:\d+:\d+\.\d+),").expect("")
+    Regex::new(r"Dialogue:\s*\d+,(\d+:\d+:\d+\.\d+),(\d+:\d+:\d+\.\d+),").expect("未能编译DIALOGUE_REGEX")
 });
 static K_TAG_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\{\\k(\d+)\}([^\\{]*)").expect("")
+    Regex::new(r"\{\\k[f]?(\d+)\}([^\\{]*)").expect("未能编译K_TAG_REGEX")
 });
 static QRC_TIMESTAMP_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\[(\d+),(\d+)\]").expect("")
+    Regex::new(r"\[(\d+),(\d+)\]").expect("未能编译QRC_TIMESTAMP_REGEX")
 });
 static WORD_TIME_TAG_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([^\(\)]*)(?:\((\d+),(\d+)\))?").expect("")
+    Regex::new(r"([^\(\)]*)(?:\((\d+),(\d+)\))?").expect("未能编译WORD_TIME_TAG_REGEX")
 });
 static ASS_NAME_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"Dialogue:\s*\d+,[^,]+,[^,]+,[^,]+,([^,]*),").expect("")
+    Regex::new(r"Dialogue:\s*\d+,[^,]+,[^,]+,[^,]+,([^,]*),").expect("未能编译ASS_NAME_REGEX")
 });
 static LYS_PROPERTY_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\[(\d+)\](.*)").expect("")
+    Regex::new(r"\[(\d+)\](.*)").expect("未能编译LYS_PROPERTY_REGEX")
 });
 static LYS_WORD_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([^\(\)]*)(?:\((\d+),(\d+)\))?").expect("")
+    Regex::new(r"([^\(\)]*)(?:\((\d+),(\d+)\))?").expect("未能编译LYS_WORD_REGEX")
 });
 
 fn main() {
@@ -326,11 +335,10 @@ fn interactive_mode() {
 fn read_file_path(prompt_template: &str, extension: &str) -> Result<PathBuf, ConversionError> {
     loop {
         print!("{}", prompt_template.replace("{}", extension));
-        io::stdout().flush().map_err(|e| ConversionError::UserInputError(format!("刷新标准输出失败: {}", e)))?;
-
+        io::stdout().flush()?;
+        
         let mut path_str = String::new();
-        io::stdin().read_line(&mut path_str)
-                   .map_err(|e| ConversionError::UserInputError(format!("读取路径失败: {}", e)))?;
+        io::stdin().read_line(&mut path_str)?;
 
         let path_str = path_str.trim();
 
@@ -406,13 +414,7 @@ fn convert_ass_to_qrc(ass_path: &Path, qrc_path: &Path) -> Result<(), Conversion
                     segments.push((seg_text, seg_ms));
                 }
 
-                if sum_k_ms != duration_ms {
-                    log_warn!(
-                        "第 {} 行 k 值总和 {} ms 与持续时间 {} ms 不匹配",
-                        dialogue_count,
-                        sum_k_ms,
-                        duration_ms
-                    );
+                if !check_time_consistency(duration_ms, sum_k_ms, dialogue_count) {
                     warning = true;
                 }
 
@@ -430,14 +432,14 @@ fn convert_ass_to_qrc(ass_path: &Path, qrc_path: &Path) -> Result<(), Conversion
 
     display_progress_bar(total_bytes, total_bytes);
 
-    writer.flush().map_err(ConversionError::Io)?;
+    writer.flush()?;
     log_success!("{}", ASS_TO_QRC_COMPLETE);
 
     if warning {
         log_warn!("一行或多行文字总时间与行持续时间不匹配，建议修改原文件后再次转换");
         log_info!("按下任意键退出...");
         let mut dummy = String::new();
-        io::stdin().read_line(&mut dummy).map_err(ConversionError::Io)?;
+        io::stdin().read_line(&mut dummy)?;
     }
 
     Ok(())
@@ -448,6 +450,7 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
     let metadata = file.metadata()?;
     let total_bytes = metadata.len() as usize;
     let mut processed_bytes = 0;
+    let mut warning = false;
 
     let reader = BufReader::new(file);
     let mut writer = BufWriter::new(File::create(ass_path)?);
@@ -465,9 +468,12 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
     writeln!(writer, "[Events]")?;
     writeln!(writer, "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")?;
 
+    let mut line_count = 0;
+
     for line_result in reader.lines() {
         let line = line_result?;
         processed_bytes += line.len() + 1; 
+        line_count += 1;
 
         if !line.starts_with('[') {
             display_progress_bar(processed_bytes.min(total_bytes), total_bytes);
@@ -484,6 +490,7 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
 
             let mut ass_text = String::new();
             let mut last_word_end_ms = header_start_ms;
+            let mut total_word_duration = 0;
 
             let content_part = &line[ts_caps.get(0).unwrap().end()..];
 
@@ -499,12 +506,14 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
 
                     let current_word_start_ms: usize = ts_match.as_str().parse()?;
                     let current_word_duration_ms: usize = dur_match.as_str().parse()?;
+                    total_word_duration += current_word_duration_ms;
 
                     if current_word_start_ms > last_word_end_ms {
                         let gap_ms = current_word_start_ms - last_word_end_ms;
                         let gap_k_value = (gap_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER;
                         if gap_k_value > 0 {
                             ass_text.push_str(&format!("{{\\kf{}}}", gap_k_value));
+                            total_word_duration += gap_ms;
                         }
                     }
 
@@ -523,7 +532,12 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
                 let final_gap_k_value = (final_gap_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER;
                 if final_gap_k_value > 0 {
                     ass_text.push_str(&format!("{{\\kf{}}}", final_gap_k_value));
+                    total_word_duration += final_gap_ms;
                 }
+            }
+
+            if !check_time_consistency(header_duration_ms, total_word_duration, line_count) {
+                warning = true;
             }
 
             let ass_text = ass_text.replace("{\\kf0}", "");
@@ -543,6 +557,14 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
 
     display_progress_bar(total_bytes, total_bytes);
     log_success!("{}", QRC_TO_ASS_COMPLETE);
+    
+    if warning {
+        log_warn!("一行或多行文字总时间与行持续时间不匹配，建议修改原文件后再次转换");
+        log_info!("按下任意键退出...");
+        let mut dummy = String::new();
+        io::stdin().read_line(&mut dummy)?;
+    }
+    
     Ok(())
 }
 
@@ -617,29 +639,29 @@ fn convert_ass_to_lys(ass_path: &Path, lys_path: &Path) -> Result<(), Conversion
             let property = if let Some(name_caps) = ASS_NAME_REGEX.captures(line) {
                 let name = name_caps.get(1).unwrap().as_str();
                 match name {
-                    "左" => 1,
-                    "右" => 2,
+                    "左" => LYS_PROPERTY_LEFT,
+                    "右" => LYS_PROPERTY_RIGHT,
                     "背" => {
                         if i > 0 {
                             if let Some(prev_name_caps) = ASS_NAME_REGEX.captures(&dialogues[i-1]) {
                                 let prev_name = prev_name_caps.get(1).unwrap().as_str();
                                 match prev_name {
-                                    "左" => 7,
-                                    "右" => 8,
+                                    "左" => LYS_PROPERTY_BACK_LEFT,
+                                    "右" => LYS_PROPERTY_BACK_RIGHT,
                                     "背" => last_property, 
-                                    _ => 6, 
+                                    _ => LYS_PROPERTY_BACK_UNSET, 
                                 }
                             } else {
-                                6 
+                                LYS_PROPERTY_BACK_UNSET 
                             }
                         } else {
-                            6 
+                            LYS_PROPERTY_BACK_UNSET 
                         }
                     },
-                    _ => 0, 
+                    _ => LYS_PROPERTY_UNSET, 
                 }
             } else {
-                0 
+                LYS_PROPERTY_UNSET 
             };
 
             last_property = property;
@@ -658,10 +680,10 @@ fn convert_ass_to_lys(ass_path: &Path, lys_path: &Path) -> Result<(), Conversion
 
             if sum_k_ms != duration_ms {
                 log_warn!(
-                    "第 {} 行 k 值总和 {} ms 与持续时间 {} ms 不匹配",
+                    "第 {} 行 k 值总和 {}{}{} ms 与持续时间 {}{}{} ms 不匹配",
                     dialogue_count,
-                    sum_k_ms,
-                    duration_ms
+                    RED, sum_k_ms, RESET,
+                    GREEN, duration_ms, RESET
                 );
                 warning = true;
             }
@@ -679,14 +701,14 @@ fn convert_ass_to_lys(ass_path: &Path, lys_path: &Path) -> Result<(), Conversion
 
     display_progress_bar(total_bytes, total_bytes);
 
-    writer.flush().map_err(ConversionError::Io)?;
+    writer.flush()?;
     log_success!("{}", ASS_TO_LYS_COMPLETE);
 
     if warning {
         log_warn!("一行或多行文字总时间与行持续时间不匹配，建议修改原文件后再次转换");
         log_info!("按下任意键退出...");
         let mut dummy = String::new();
-        io::stdin().read_line(&mut dummy).map_err(ConversionError::Io)?;
+        io::stdin().read_line(&mut dummy)?;
     }
 
     Ok(())
@@ -751,11 +773,11 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<(), Conversion
             let content = caps.get(2).unwrap().as_str();
             
             let name = match property {
-                1 => "左",
-                2 => "右",
-                6 => "背",
-                7 => "背", 
-                8 => "背", 
+                LYS_PROPERTY_LEFT => "左",
+                LYS_PROPERTY_RIGHT => "右",
+                LYS_PROPERTY_BACK_UNSET => "背",
+                LYS_PROPERTY_BACK_LEFT => "背", 
+                LYS_PROPERTY_BACK_RIGHT => "背", 
                 _ => "",
             };
             
@@ -806,4 +828,17 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<(), Conversion
     log_success!("{}", LYS_TO_ASS_COMPLETE);
     
     Ok(())
+}
+
+fn check_time_consistency(expected_duration: usize, actual_duration: usize, line_number: usize) -> bool {
+    if expected_duration != actual_duration {
+        log_warn!(
+            "第 {} 行时间总和 {}{}{} ms 与持续时间 {}{}{} ms 不匹配",
+            line_number,
+            RED, actual_duration, RESET,
+            GREEN, expected_duration, RESET
+        );
+        return false;
+    }
+    true
 }
