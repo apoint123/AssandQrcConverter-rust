@@ -451,6 +451,16 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
     let reader = BufReader::new(file);
     let mut writer = BufWriter::new(File::create(ass_path)?);
 
+    writeln!(writer, "[Script Info]")?;
+    writeln!(writer, "PlayResX: 1920")?;
+    writeln!(writer, "PlayResY: 1440")?;
+    writeln!(writer)?;
+    
+    writeln!(writer, "[V4+ Styles]")?;
+    writeln!(writer, "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding")?;
+    writeln!(writer, "Style: Default,微软雅黑,100,&H00FFFFFF,&H004E503F,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1")?;
+    writeln!(writer)?;
+
     writeln!(writer, "[Events]")?;
     writeln!(writer, "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")?;
 
@@ -716,6 +726,16 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<(), Conversion
 
     let reader = BufReader::new(file);
     let mut writer = BufWriter::new(File::create(ass_path)?);
+
+    writeln!(writer, "[Script Info]")?;
+    writeln!(writer, "PlayResX: 1920")?;
+    writeln!(writer, "PlayResY: 1440")?;
+    writeln!(writer)?;
+    
+    writeln!(writer, "[V4+ Styles]")?;
+    writeln!(writer, "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding")?;
+    writeln!(writer, "Style: Default,微软雅黑,100,&H00FFFFFF,&H004E503F,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1")?;
+    writeln!(writer)?;
 
     writeln!(writer, "[Events]")?;
     writeln!(writer, "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")?;
