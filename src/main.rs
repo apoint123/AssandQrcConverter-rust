@@ -55,22 +55,22 @@ const LYS_PROPERTY_BACK_RIGHT: usize = 8;
 
 macro_rules! log_info {
     ($($arg:tt)*) => {
-        println!("\n{}[提示]{} {}", CYAN, RESET, format!($($arg)*));
+        println!("\n{}[提示]{} {}", CYAN, RESET, format!($($arg)*))
     }
 }
 macro_rules! log_success {
     ($($arg:tt)*) => {
-        println!("\n{}[成功]{} {}", GREEN, RESET, format!($($arg)*));
+        println!("\n{}[成功]{} {}", GREEN, RESET, format!($($arg)*))
     }
 }
 macro_rules! log_warn {
     ($($arg:tt)*) => {
-        eprintln!("\n{}[警告]{} {}", YELLOW, RESET, format!($($arg)*));
+        eprintln!("\n{}[警告]{} {}", YELLOW, RESET, format!($($arg)*))
     }
 }
 macro_rules! log_error {
     ($($arg:tt)*) => {
-        eprintln!("\n{}[错误]{} {}", RED, RESET, format!($($arg)*));
+        eprintln!("\n{}[错误]{} {}", RED, RESET, format!($($arg)*))
     }
 }
 
@@ -133,7 +133,7 @@ static QRC_TIMESTAMP_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"\[(\d+),(\d+)\]").expect("未能编译QRC_TIMESTAMP_REGEX")
 });
 static WORD_TIME_TAG_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([^\(\)]*)(?:\((\d+),(\d+)\))?").expect("未能编译WORD_TIME_TAG_REGEX")
+    Regex::new(r"\((\d+),(\d+)\)").expect("未能编译WORD_TIME_TAG_REGEX")
 });
 static ASS_NAME_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"Dialogue:\s*\d+,[^,]+,[^,]+,[^,]+,([^,]*),").expect("未能编译ASS_NAME_REGEX")
@@ -340,7 +340,12 @@ fn read_file_path(prompt_template: &str, extension: &str) -> Result<PathBuf, Con
         let mut path_str = String::new();
         io::stdin().read_line(&mut path_str)?;
 
-        let path_str = path_str.trim();
+        let mut path_str = path_str.trim();
+
+        if (path_str.starts_with('"') && path_str.ends_with('"')) || 
+           (path_str.starts_with('\'') && path_str.ends_with('\'')) {
+            path_str = &path_str[1..path_str.len()-1];
+        }
 
         if path_str.is_empty() {
             log_error!("{}", EMPTY_FILE_PATH_ERROR.replace("{}", extension)); 
@@ -450,7 +455,6 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
     let metadata = file.metadata()?;
     let total_bytes = metadata.len() as usize;
     let mut processed_bytes = 0;
-    let mut warning = false;
 
     let reader = BufReader::new(file);
     let mut writer = BufWriter::new(File::create(ass_path)?);
@@ -468,12 +472,10 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
     writeln!(writer, "[Events]")?;
     writeln!(writer, "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")?;
 
-    let mut line_count = 0;
 
     for line_result in reader.lines() {
         let line = line_result?;
         processed_bytes += line.len() + 1; 
-        line_count += 1;
 
         if !line.starts_with('[') {
             display_progress_bar(processed_bytes.min(total_bytes), total_bytes);
@@ -490,41 +492,47 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
 
             let mut ass_text = String::new();
             let mut last_word_end_ms = header_start_ms;
-            let mut total_word_duration = 0;
 
             let content_part = &line[ts_caps.get(0).unwrap().end()..];
-
-            for word_cap in WORD_TIME_TAG_REGEX.captures_iter(content_part) {
-                let word = word_cap.get(1).map(|m| m.as_str()).unwrap_or("");
-                if word.is_empty() { continue; }
-
-                if let (Some(ts_match), Some(dur_match)) = (word_cap.get(2), word_cap.get(3)) {
-                    if ts_match.as_str() == "0" && dur_match.as_str() == "0" {
-                        ass_text.push_str(word);
-                        continue;
-                    }
-
-                    let current_word_start_ms: usize = ts_match.as_str().parse()?;
-                    let current_word_duration_ms: usize = dur_match.as_str().parse()?;
-                    total_word_duration += current_word_duration_ms;
-
-                    if current_word_start_ms > last_word_end_ms {
-                        let gap_ms = current_word_start_ms - last_word_end_ms;
-                        let gap_k_value = (gap_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER;
-                        if gap_k_value > 0 {
-                            ass_text.push_str(&format!("{{\\k{}}}", gap_k_value));
-                            total_word_duration += gap_ms;
-                        }
-                    }
-
-                    let word_k_value = (current_word_duration_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER; 
-                    ass_text.push_str(&format!("{{\\k{}}}{}", word_k_value, word));
-
-                    last_word_end_ms = current_word_start_ms + current_word_duration_ms;
-                    
+            
+            let mut time_positions = Vec::new();
+            for cap in WORD_TIME_TAG_REGEX.captures_iter(content_part) {
+                let start_pos = cap.get(0).unwrap().start();
+                let end_pos = cap.get(0).unwrap().end();
+                let start_ms: usize = cap[1].parse()?;
+                let duration_ms: usize = cap[2].parse()?;
+                
+                time_positions.push((start_pos, end_pos, start_ms, duration_ms));
+            }
+            
+            time_positions.sort_by_key(|&(pos, _, _, _)| pos);
+            
+            for i in 0..time_positions.len() {
+                let (start_pos, _end_pos, current_word_start_ms, current_word_duration_ms) = time_positions[i];
+                
+                let word_start = if i == 0 {
+                    0
                 } else {
+                    time_positions[i-1].1
+                };
+                
+                let word = &content_part[word_start..start_pos];
+                
+                if current_word_start_ms > last_word_end_ms {
+                    let gap_ms = current_word_start_ms - last_word_end_ms;
+                    let gap_k_value = (gap_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER;
+                    if gap_k_value > 0 {
+                        ass_text.push_str(&format!("{{\\k{}}}", gap_k_value));
+                    }
+                }
+                
+                let word_k_value = (current_word_duration_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER;
+                if word_k_value > 0 && !word.is_empty() {
+                    ass_text.push_str(&format!("{{\\k{}}}{}", word_k_value, word));
+                } else if !word.is_empty() {
                     ass_text.push_str(word);
                 }
+                last_word_end_ms = current_word_start_ms + current_word_duration_ms;
             }
 
             if last_word_end_ms < header_end_ms && (header_end_ms - last_word_end_ms) > QRC_GAP_THRESHOLD_MS {
@@ -532,12 +540,7 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
                 let final_gap_k_value = (final_gap_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER;
                 if final_gap_k_value > 0 {
                     ass_text.push_str(&format!("{{\\k{}}}", final_gap_k_value));
-                    total_word_duration += final_gap_ms;
                 }
-            }
-
-            if !check_time_consistency(header_duration_ms, total_word_duration, line_count) {
-                warning = true;
             }
 
             let ass_text = ass_text.replace("{\\k0}", "");
@@ -557,14 +560,7 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
 
     display_progress_bar(total_bytes, total_bytes);
     log_success!("{}", QRC_TO_ASS_COMPLETE);
-    
-    if warning {
-        log_warn!("一行或多行文字总时间与行持续时间不匹配，建议修改原文件后再次转换");
-        log_info!("按下任意键退出...");
-        let mut dummy = String::new();
-        io::stdin().read_line(&mut dummy)?;
-    }
-    
+        
     Ok(())
 }
 
