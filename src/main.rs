@@ -502,10 +502,14 @@ fn convert_qrc_to_ass(qrc_path: &Path, ass_path: &Path) -> Result<(), Conversion
                 let start_ms: usize = cap[1].parse()?;
                 let duration_ms: usize = cap[2].parse()?;
                 
+                if start_ms == 0 && duration_ms == 0 {
+                    continue;
+                }
+                
                 time_positions.push((start_pos, end_pos, start_ms, duration_ms));
             }
             
-            time_positions.sort_by_key(|&(pos, _, _, _)| pos);
+            time_positions.sort_by_key(|&(_, _, start_ms, _)| start_ms);
             
             for i in 0..time_positions.len() {
                 let (start_pos, _end_pos, current_word_start_ms, current_word_duration_ms) = time_positions[i];
@@ -782,6 +786,8 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<(), Conversion
             let mut ass_text = String::new();
             let mut first_word = true;
             
+            let mut last_end = start_ms;
+            
             for word_cap in LYS_WORD_REGEX.captures_iter(content) {
                 let word = word_cap.get(1).map(|m| m.as_str()).unwrap_or("");
                 if word.is_empty() { continue; }
@@ -790,10 +796,25 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<(), Conversion
                     let word_start_ms: usize = ts_match.as_str().parse()?;
                     let word_duration_ms: usize = dur_match.as_str().parse()?;
                     
+                    if word_start_ms == 0 && word_duration_ms == 0 {
+                        ass_text.push_str(word);
+                        continue;
+                    }
+                    
                     if first_word {
                         start_ms = word_start_ms;
+                        last_end = start_ms;
                         first_word = false;
                     }
+
+                    if !first_word && word_start_ms > last_end {
+                        let gap_duration = word_start_ms - last_end;
+                        let gap_k = (gap_duration + K_TAG_MULTIPLIER/2) / K_TAG_MULTIPLIER;
+                        if gap_k > 0 {
+                            ass_text.push_str(&format!("{{\\k{}}}", gap_k));
+                        }
+                    }
+                    last_end = word_start_ms + word_duration_ms;
                     
                     end_ms = word_start_ms + word_duration_ms;
                     
