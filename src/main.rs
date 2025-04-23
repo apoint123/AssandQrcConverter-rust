@@ -47,8 +47,8 @@ const LYS_PROPERTY_UNSET: usize = 0;
 const LYS_PROPERTY_LEFT: usize = 1;
 const LYS_PROPERTY_RIGHT: usize = 2;
 //const LYS_PROPERTY_NO_BACK_UNSET: usize = 3;
-//const LYS_PROPERTY_NO_BACK_LEFT: usize = 4;
-//const LYS_PROPERTY_NO_BACK_RIGHT: usize = 5;
+const LYS_PROPERTY_NO_BACK_LEFT: usize = 4;
+const LYS_PROPERTY_NO_BACK_RIGHT: usize = 5;
 const LYS_PROPERTY_BACK_UNSET: usize = 6;
 const LYS_PROPERTY_BACK_LEFT: usize = 7;
 const LYS_PROPERTY_BACK_RIGHT: usize = 8;
@@ -639,8 +639,8 @@ fn convert_ass_to_lys(ass_path: &Path, lys_path: &Path) -> Result<(), Conversion
             let property = if let Some(name_caps) = ASS_NAME_REGEX.captures(line) {
                 let name = name_caps.get(1).unwrap().as_str();
                 match name {
-                    "左" => LYS_PROPERTY_LEFT,
-                    "右" => LYS_PROPERTY_RIGHT,
+                    "左" => LYS_PROPERTY_NO_BACK_LEFT,
+                    "右" => LYS_PROPERTY_NO_BACK_RIGHT,
                     "背" => {
                         if i > 0 {
                             if let Some(prev_name_caps) = ASS_NAME_REGEX.captures(&dialogues[i-1]) {
@@ -773,11 +773,13 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<(), Conversion
             let content = caps.get(2).unwrap().as_str();
             
             let name = match property {
+                LYS_PROPERTY_NO_BACK_LEFT => "左",
+                LYS_PROPERTY_NO_BACK_RIGHT => "右",
                 LYS_PROPERTY_LEFT => "左",
                 LYS_PROPERTY_RIGHT => "右",
                 LYS_PROPERTY_BACK_UNSET => "背",
-                LYS_PROPERTY_BACK_LEFT => "背", 
-                LYS_PROPERTY_BACK_RIGHT => "背", 
+                LYS_PROPERTY_BACK_LEFT => "背",
+                LYS_PROPERTY_BACK_RIGHT => "背",
                 _ => "",
             };
             
@@ -809,17 +811,19 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<(), Conversion
 
                     if !first_word && word_start_ms > last_end {
                         let gap_duration = word_start_ms - last_end;
-                        let gap_k = (gap_duration + K_TAG_MULTIPLIER/2) / K_TAG_MULTIPLIER;
+                        let gap_k = gap_duration / K_TAG_MULTIPLIER;
                         if gap_k > 0 {
                             ass_text.push_str(&format!("{{\\k{}}}", gap_k));
+                        } else if gap_duration > 5 && gap_duration <= 10 {
+                            ass_text.push_str("{\\k1}");
                         }
                     }
-                    last_end = word_start_ms + word_duration_ms;
-                    
-                    end_ms = word_start_ms + word_duration_ms;
                     
                     let k_value = (word_duration_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER;
                     ass_text.push_str(&format!("{{\\k{}}}{}", k_value, word));
+                    
+                    last_end = word_start_ms + word_duration_ms;
+                    end_ms = last_end;
                 }
             }
             
