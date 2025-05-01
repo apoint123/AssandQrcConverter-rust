@@ -141,9 +141,6 @@ static ASS_NAME_REGEX: Lazy<Regex> = Lazy::new(|| {
 static LYS_PROPERTY_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"\[(\d+)\](.*)").expect("未能编译LYS_PROPERTY_REGEX")
 });
-static LYS_WORD_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([^\(\)]*)(?:\((\d+),(\d+)\))?").expect("未能编译LYS_WORD_REGEX")
-});
 
 fn main() {
         let args: Vec<String> = env::args().skip(1).collect();
@@ -754,7 +751,7 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<(), Conversion
     writeln!(writer, "PlayResX: 1920")?;
     writeln!(writer, "PlayResY: 1440")?;
     writeln!(writer)?;
-    
+        
     writeln!(writer, "[V4+ Styles]")?;
     writeln!(writer, "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding")?;
     writeln!(writer, "Style: Default,微软雅黑,100,&H00FFFFFF,&H004E503F,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1")?;
@@ -762,92 +759,105 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<(), Conversion
 
     writeln!(writer, "[Events]")?;
     writeln!(writer, "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")?;
-
+    
 
     for line_result in reader.lines() {
         let line = line_result?;
-        processed_bytes += line.len() + 1;
+        processed_bytes += line.len() + if cfg!(windows) { 2 } else { 1 };
 
-        if let Some(caps) = LYS_PROPERTY_REGEX.captures(&line) {
-            let property = caps.get(1).unwrap().as_str().parse::<usize>().unwrap_or(0);
-            let content = caps.get(2).unwrap().as_str();
-            
-            let name = match property {
-                LYS_PROPERTY_NO_BACK_LEFT => "左",
-                LYS_PROPERTY_NO_BACK_RIGHT => "右",
-                LYS_PROPERTY_LEFT => "左",
-                LYS_PROPERTY_RIGHT => "右",
-                LYS_PROPERTY_BACK_UNSET => "背",
-                LYS_PROPERTY_BACK_LEFT => "背",
-                LYS_PROPERTY_BACK_RIGHT => "背",
+        if let Some(prop_caps) = LYS_PROPERTY_REGEX.captures(&line) {
+            let property: usize = prop_caps[1].parse().unwrap_or(LYS_PROPERTY_UNSET);
+            let content = &prop_caps[2];
+
+            let mut timestamps: Vec<(usize, usize, usize, usize)> = Vec::new();
+            for ts_caps in WORD_TIME_TAG_REGEX.captures_iter(content) {
+                let start_pos = ts_caps.get(0).unwrap().start();
+                let end_pos = ts_caps.get(0).unwrap().end();
+                let start_ms: usize = ts_caps[1].parse()?;
+                let duration_ms: usize = ts_caps[2].parse()?;
+                timestamps.push((start_pos, end_pos, start_ms, duration_ms));
+            }
+
+            if timestamps.is_empty() {
+                display_progress_bar(processed_bytes.min(total_bytes), total_bytes);
+                continue;
+            }
+
+            timestamps.sort_by_key(|k| k.0);
+
+            let mut ass_text_parts: Vec<String> = Vec::new();
+            let mut last_char_pos = 0;
+            let mut min_start_ms = usize::MAX;
+            let mut max_end_ms = 0;
+
+            for &(_, _, start_ms, duration_ms) in &timestamps {
+                 if start_ms < min_start_ms {
+                     min_start_ms = start_ms;
+                 }
+                 let current_end_ms = start_ms.saturating_add(duration_ms);
+                 if current_end_ms > max_end_ms {
+                     max_end_ms = current_end_ms;
+                 }
+            }
+
+            if min_start_ms == usize::MAX {
+                 display_progress_bar(processed_bytes.min(total_bytes), total_bytes);
+                 continue;
+            }
+            let mut expected_next_start_ms = min_start_ms;
+
+            for &(start_pos, end_pos, current_start_ms, current_duration_ms) in timestamps.iter() {
+                if current_start_ms > expected_next_start_ms {
+                    let gap_ms = current_start_ms - expected_next_start_ms;
+                    let gap_k_value = gap_ms / K_TAG_MULTIPLIER;
+                    if gap_k_value > 0 {
+                        ass_text_parts.push(format!("{{\\k{}}}", gap_k_value));
+                    }
+                }
+
+                let text_segment = content[last_char_pos..start_pos].to_string();
+
+                let mut k_value = current_duration_ms / K_TAG_MULTIPLIER;
+
+                if current_duration_ms > 0 && current_duration_ms < 6 {
+                    k_value = 1;
+                }
+
+                if k_value > 0 {
+                    ass_text_parts.push(format!("{{\\k{}}}{}", k_value, text_segment));
+                } else {
+                    ass_text_parts.push(text_segment);
+                }
+                expected_next_start_ms = current_start_ms.saturating_add(current_duration_ms);
+                last_char_pos = end_pos;
+            }
+
+            let start_time_ass = milliseconds_to_time(min_start_ms);
+            let end_time_ass = milliseconds_to_time(max_end_ms);
+            let final_ass_text = ass_text_parts.join("");
+
+            let ass_name = match property {
+                LYS_PROPERTY_LEFT | LYS_PROPERTY_NO_BACK_LEFT => "左",
+                LYS_PROPERTY_RIGHT | LYS_PROPERTY_NO_BACK_RIGHT => "右",
+                LYS_PROPERTY_BACK_UNSET | LYS_PROPERTY_BACK_LEFT | LYS_PROPERTY_BACK_RIGHT => "背",
                 _ => "",
             };
-            
-            let mut start_ms = 0;
-            let mut end_ms = 0;
-            let mut ass_text = String::new();
-            let mut first_word = true;
-            
-            let mut last_end = start_ms;
-            
-            for word_cap in LYS_WORD_REGEX.captures_iter(content) {
-                let word = word_cap.get(1).map(|m| m.as_str()).unwrap_or("");
-                if word.is_empty() { continue; }
-                
-                if let (Some(ts_match), Some(dur_match)) = (word_cap.get(2), word_cap.get(3)) {
-                    let word_start_ms: usize = ts_match.as_str().parse()?;
-                    let word_duration_ms: usize = dur_match.as_str().parse()?;
-                    
-                    if word_start_ms == 0 && word_duration_ms == 0 {
-                        ass_text.push_str(word);
-                        continue;
-                    }
-                    
-                    if first_word {
-                        start_ms = word_start_ms;
-                        last_end = start_ms;
-                        first_word = false;
-                    }
 
-                    if !first_word && word_start_ms > last_end {
-                        let gap_duration = word_start_ms - last_end;
-                        let gap_k = gap_duration / K_TAG_MULTIPLIER;
-                        if gap_k > 0 {
-                            ass_text.push_str(&format!("{{\\k{}}}", gap_k));
-                        } else if gap_duration > 5 && gap_duration <= 10 {
-                            ass_text.push_str("{\\k1}");
-                        }
-                    }
-                    
-                    let k_value = (word_duration_ms + K_TAG_MULTIPLIER / 2) / K_TAG_MULTIPLIER;
-                    ass_text.push_str(&format!("{{\\k{}}}{}", k_value, word));
-                    
-                    last_end = word_start_ms + word_duration_ms;
-                    end_ms = last_end;
-                }
-            }
-            
-            if !ass_text.is_empty() {
-                let start_time = milliseconds_to_time(start_ms);
-                let end_time = milliseconds_to_time(end_ms);
-                
-                writeln!(
-                    writer,
-                    "Dialogue: 0,{},{},Default,{},0,0,0,,{}", 
-                    start_time,
-                    end_time,
-                    name,
-                    ass_text
-                )?;
-            }
+            writeln!(
+                writer,
+                "Dialogue: 0,{},{},Default,{},0,0,0,,{}",
+                start_time_ass, end_time_ass, ass_name, final_ass_text
+            )?;
         }
-        
+
         display_progress_bar(processed_bytes.min(total_bytes), total_bytes);
     }
-    
+
     display_progress_bar(total_bytes, total_bytes);
+    println!();
+
+    writer.flush()?;
     log_success!("{}", LYS_TO_ASS_COMPLETE);
-    
     Ok(())
 }
 
