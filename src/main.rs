@@ -1654,19 +1654,67 @@ fn calculate_lys_property(
     }
 }
 
-/// 辅助函数：将从 ASS 解析出的 Name 字段 (Option<&str>) 映射到对应的逻辑分类。
+/// 将从 ASS 解析出的 Name 字段 (Option<&str>) 映射到对应的内部逻辑分类 `AssNameCategory`。
+///
+/// 此函数旨在处理 ASS `Dialogue` 行中的 `Name` 字段，即使该字段包含多个由空格分隔的标签
+/// （例如 "左 itunes:song-part=..." 或 "v1 extra-tag"）。
+/// 它会分析 `Name` 字段的第一个词（"word"，按空格分割）是否为已知的类别关键字。
+///
+/// # Arguments
+/// * `name_opt` - 一个 `Option<&str>`，代表从 ASS 行解析出来的 `Name` 字段。
+///   - `None` 表示 ASS 行中没有 `Name` 字段。
+///   - `Some("")` 表示 `Name` 字段存在但为空。
+///   - `Some("左 anothertag")` 表示 `Name` 字段包含内容。
+///
+/// # Returns
+/// * `AssNameCategory` - 根据 `Name` 字段内容判断出的逻辑分类。
+///
+/// # 逻辑优先级:
+/// 1. 如果 `name_opt` 是 `None` (无 Name 字段) 或 `Some("")` (Name 字段为空)，则归类为 `AssNameCategory::LeftV1`。
+/// 2. 否则，获取 `Name` 字段字符串，去除首尾空格。
+/// 3. 将处理后的字符串按空格分割，提取第一个词（`first_part`）。
+/// 4. 检查 `first_part` 是否匹配以下任一关键字组合：
+///    - "左" 或 "v1" -> `AssNameCategory::LeftV1`
+///    - "右" 或 "v2" 或 "x-duet" 或 "x-anti" -> `AssNameCategory::RightV2`
+///    - "背" 或 "x-bg" -> `AssNameCategory::Background`
+/// 5. 如果 `first_part` 不匹配任何已知关键字，则记录一条警告日志，并将该 `Name` 字段归类为 `AssNameCategory::Other`。
+///    这适用于如 "路人甲" 或其他非预定义 Actor 名称的情况。
 fn map_ass_name_to_category(name_opt: Option<&str>) -> AssNameCategory {
     match name_opt {
-        None => AssNameCategory::LeftV1, // 将 None (没有 Name 字段) 归类为 LeftV1
-        Some(name) => match name { // 对实际的 Name 字符串进行匹配
-            "" | "v1" | "左" => AssNameCategory::LeftV1, // 空字符串、"v1"、"左" 归为 LeftV1
-            "右" | "v2" | "x-duet" | "x-anti" => AssNameCategory::RightV2, // "右"、"v2" 等归为 RightV2
-            "背" | "x-bg" => AssNameCategory::Background,
-            other_name => {
-                // 提示用户遇到了未明确处理的 Name 值
-                log_warn!("遇到未定义的 ASS Name 字段值 '{}'，将按默认方式处理。", other_name);
-                AssNameCategory::Other // 仍然返回 Other 类别
+        // 情况 1: Name 字段不存在或为空
+        None | Some("") => AssNameCategory::LeftV1,
+        Some(name_str) => {
+            // 去除 Name 字段首尾的空格，以确保后续处理的准确性
+            let trimmed_name = name_str.trim();
+
+            // 如果去除空格后为空字符串，也视为 LeftV1 (例如 Name 字段只包含空格)
+            if trimmed_name.is_empty() {
+                return AssNameCategory::LeftV1;
             }
+
+            // 按空白字符分割 Name 字段，以分析其组成部分，特别是第一个词。
+            // `.next()` 获取迭代器的第一个元素，即按空格分割后的第一个词。
+            if let Some(first_part) = trimmed_name.split_whitespace().next() {
+                // 情况 4: 检查第一个词是否为已定义的类别关键字
+                if matches!(first_part, "左" | "v1") {
+                    return AssNameCategory::LeftV1;
+                }
+                if matches!(first_part, "右" | "v2" | "x-duet" | "x-anti") {
+                    return AssNameCategory::RightV2;
+                }
+                if matches!(first_part, "背" | "x-bg") {
+                    return AssNameCategory::Background;
+                }
+            }
+            
+            // 情况 5: 如果 Name 字段的第一个词不匹配任何已知关键字
+            // (或者 Name 字段不包含任何非空白字符，这种情况已被 trimmed_name.is_empty() 捕获)
+            // 则记录警告并归类为 Other。
+            log_warn!(
+                "遇到未定义的 ASS Name 字段值 '{}'，将按默认方式处理。",
+                name_str // 记录原始的 name_str 以便调试
+            );
+            AssNameCategory::Other
         }
     }
 }
