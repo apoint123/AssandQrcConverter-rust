@@ -341,7 +341,6 @@ fn main() {
 /// * `input_path` - 输入文件的路径。
 /// * `output_path` - 输出文件的路径。
 fn run_manual_mode_clap(direction: &str, input_path: &Path, output_path: &Path, extract_lrc: bool) {
-    // 检查输入文件是否存在
     if !input_path.exists() {
         log_error!("{}", FILE_NOT_FOUND_ERROR);
         wait_for_exit();
@@ -350,12 +349,14 @@ fn run_manual_mode_clap(direction: &str, input_path: &Path, output_path: &Path, 
 
     // 定义转换函数的类型签名别名，方便使用。
     let lower_dir = direction.to_lowercase(); // 将方向字符串转为小写，进行不区分大小写的匹配。
+    // 定义转换函数的包装器，以统一返回类型 (Result<bool, ConversionError>)
+    // 这里的 bool 代表 warning_occurred
+    let qrc2ass_wrapper = |i: &Path, o: &Path| convert_qrc_to_ass(i, o); // convert_qrc_to_ass 已经是 Result<bool, ...>
+    let lys2ass_wrapper = |i: &Path, o: &Path| convert_lys_to_ass(i, o); // convert_lys_to_ass 已经是 Result<bool, ...>
+    // convert_ass_to_qrc 和 convert_ass_to_lys 已经是 Result<bool, ...>
 
     // 根据方向字符串选择对应的转换函数。
-    let qrc2ass_wrapper = |i: &Path, o: &Path| convert_qrc_to_ass(i, o).map(|_| false); // 包装后返回 Ok(false)
-    let lys2ass_wrapper = |i: &Path, o: &Path| convert_lys_to_ass(i, o).map(|_| false); // 包装后返回 Ok(false)
-
-    let final_action: Option<ConversionFnSig> = match lower_dir.as_str() {
+    let conversion_function_to_execute: Option<ConversionFnSig> = match lower_dir.as_str() {
         "ass2qrc" | "2q" => Some(convert_ass_to_qrc),
         "qrc2ass" | "2a" => Some(qrc2ass_wrapper),
         "ass2lys" | "2l" => Some(convert_ass_to_lys),
@@ -363,41 +364,50 @@ fn run_manual_mode_clap(direction: &str, input_path: &Path, output_path: &Path, 
         _ => None,
     };
 
+    // 初始化一个变量来跟踪操作是否需要暂停
+    let mut operation_requires_pause = false;
 
-
-    // 执行选定的转换或报告方向无效。
-    match final_action {
-        Some(action) => { // conversion_action 在前面已确定
-            // 先执行主转换
-            let mut needs_wait = execute_conversion(action, input_path, output_path);
+    match conversion_function_to_execute {
+        Some(selected_action) => {
+            // 首先执行主转换
+            // execute_conversion 返回 true 如果主转换出错或有需要暂停的警告
+            operation_requires_pause = execute_conversion(selected_action, input_path, output_path);
 
             // 检查是否需要提取翻译 (仅当输入是 ASS 时)
             let input_is_ass = input_path.extension()
                 .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("ass"));
 
-            if input_is_ass && extract_lrc {
-                if let Err(e) = extract_translations_to_lrc(input_path) {
-                    log_error!("提取 LRC 翻译时出错: {}", e);
-                    needs_wait = true; // 提取出错需要等待
+            if input_is_ass && extract_lrc { // extract_lrc 是命令行参数
+                match extract_translations_to_lrc(input_path) {
+                    Ok(warned) => {
+                        if warned { operation_requires_pause = true; } // 如果提取操作本身有警告，也需要暂停
+                    }
+                    Err(e) => {
+                        log_error!("提取 LRC 翻译时出错: {}", e);
+                        operation_requires_pause = true; // 提取出错需要暂停
+                    }
                 }
-                if let Err(e) = extract_roma_to_lrc(input_path) {
-                    log_error!("提取 LRC 罗马音时出错: {}", e);
-                    needs_wait = true; // 提取出错需要等待
+                match extract_roma_to_lrc(input_path) {
+                    Ok(warned) => {
+                        if warned { operation_requires_pause = true; } // 如果提取操作本身有警告，也需要暂停
+                    }
+                    Err(e) => {
+                        log_error!("提取 LRC 罗马音时出错: {}", e);
+                        operation_requires_pause = true; // 提取出错需要等待
+                    }
                 }
-
-            }
-
-            // 如果主转换或提取出错/有警告，则等待
-            if needs_wait {
-                wait_for_exit();
             }
         }
         None => {
-            // 无效的转换方向。
             log_error!("无效的转换方向: {}", direction);
             CliArgs::command().print_help().unwrap_or_else(|e| log_error!("无法打印帮助信息: {}",e));
-            wait_for_exit();
+            operation_requires_pause = true; // 无效方向，也需要暂停以显示帮助
         }
+    }
+
+    // 如果主转换或任何提取步骤出错/有警告，则等待用户确认
+    if operation_requires_pause {
+        wait_for_exit();
     }
 }
 
@@ -458,15 +468,25 @@ fn run_automatic_mode_clap(input_path: &Path) {
             if main_conversion_result { needs_wait = true; } // 如果主转换出错/警告，标记等待
 
             // --- 自动模式下，无条件尝试提取翻译 ---
-            if let Err(e) = extract_translations_to_lrc(input_path) {
-                 log_error!("提取 LRC 翻译时出错: {}", e);
-                 needs_wait = true;
+            match extract_translations_to_lrc(input_path) {
+                Ok(warned) => {
+                    if warned { needs_wait = true; }
+                }
+                Err(e) => {
+                    log_error!("提取 LRC 翻译时出错: {}", e);
+                    needs_wait = true;
+                }
             }
 
             // --- 自动模式下，无条件尝试提取罗马音 ---
-            if let Err(e) = extract_roma_to_lrc(input_path) {
-                 log_error!("提取 LRC 罗马音时出错: {}", e);
-                 needs_wait = true;
+            match extract_roma_to_lrc(input_path) {
+                Ok(warned) => {
+                    if warned { needs_wait = true; }
+                }
+                Err(e) => {
+                    log_error!("提取 LRC 罗马音时出错: {}", e);
+                    needs_wait = true;
+                }
             }
 
         }
@@ -872,6 +892,7 @@ fn convert_ass_to_lys(ass_path: &Path, lys_path: &Path) -> Result<bool, Conversi
     let mut parsed_dialogues: Vec<ParsedDialogue> = Vec::new(); // 存储第一遍解析的 Dialogue 数据
     let mut warning_occurred = false; // 时间不一致警告标志
     let mut line_counter: usize = 0; // 文件行号计数器
+    let mut warning_occurred_overall = false; // 用于累积所有警告
 
     // --- 第一遍扫描: 读取文件, 收集元数据, 解析 Dialogue 行并检查时间一致性 ---
     { // 使用块作用域限制 reader_pass1 的生命周期
@@ -915,7 +936,7 @@ fn convert_ass_to_lys(ass_path: &Path, lys_path: &Path) -> Result<bool, Conversi
                         {
                             // 只有在样式不是 roma/trans/ts 时才调用检查函数
                             if !check_time_consistency(dialogue_data.duration_ms, dialogue_data.sum_k_ms, dialogue_data.line_number) {
-                                warning_occurred = true; // 设置警告标志
+                                warning_occurred_overall = true; // 设置警告标志
                             }
                         }
                         parsed_dialogues.push(dialogue_data); // 存储解析结果
@@ -923,6 +944,7 @@ fn convert_ass_to_lys(ass_path: &Path, lys_path: &Path) -> Result<bool, Conversi
                     None => {
                         // 虽然以 "Dialogue:" 开头，但正则不匹配，可能格式错误
                         log_warn!("第 {} 行看起来像 Dialogue 但无法完整解析其结构。", line_counter);
+                        warning_occurred_overall = true;
                     }
                 }
             }
@@ -956,12 +978,14 @@ fn convert_ass_to_lys(ass_path: &Path, lys_path: &Path) -> Result<bool, Conversi
         let previous_dialogue = if i > 0 { parsed_dialogues.get(i - 1) } else { None };
 
         // 调用辅助函数计算当前行的 LYS 属性
-        let property = calculate_lys_property(
-            current_dialogue,
-            previous_dialogue,
-            last_calculated_property // 传入上一次的计算结果用于继承
+        let (property, calc_warned) = calculate_lys_property(
+        current_dialogue,
+        previous_dialogue,
+        last_calculated_property // 传入上一次的计算结果用于继承
         );
-        // 更新状态变量，存储当前计算出的属性，供下一次迭代的 '背' 属性计算使用
+        if calc_warned { // 如果 calculate_lys_property (主要来自 map_ass_name_to_category) 报告了警告
+            warning_occurred_overall = true;
+        }
         last_calculated_property = property;
 
         // 构建 LYS 输出行: [属性]文本1(开始ms,持续ms)文本2(开始ms,持续ms)...
@@ -991,7 +1015,7 @@ fn convert_ass_to_lys(ass_path: &Path, lys_path: &Path) -> Result<bool, Conversi
     writer.flush()?; // 确保所有缓冲数据写入磁盘
     log_success!("{}", ASS_TO_LYS_COMPLETE); // 输出成功日志
 
-    Ok(warning_occurred) // 返回成功，并附带是否发生过警告的状态
+    Ok(warning_occurred_overall) // 返回总的警告状态
 }
 
 
@@ -1002,6 +1026,7 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<bool, Conversi
     let total_bytes = metadata.len() as usize;
     let mut processed_bytes: usize = 0; // 跟踪已处理字节
     let mut line_number: usize = 0; // 文件行号
+    let mut warning_occurred_overall = false; // 用于累积所有警告
 
     let reader = BufReader::new(file);
     let mut writer = BufWriter::new(File::create(ass_path)?);
@@ -1063,6 +1088,7 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<bool, Conversi
             // 如果未能找到有效的最小开始时间 (例如所有时间戳都是 (0,0) 且被忽略)，跳过此行
             if min_start_ms == usize::MAX {
                  log_warn!("第 {} 行 LYS 数据缺少有效时间戳，已跳过。", line_number);
+                 warning_occurred_overall = true; // 累积警告
                  display_progress_bar(processed_bytes.min(total_bytes), total_bytes);
                  continue;
             }
@@ -1165,6 +1191,7 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<bool, Conversi
             // 如果行不匹配 LYS 格式 (不是 [数字] 开头)，但也不是空行或元数据行
             // 则记录一个警告，说明可能存在无法识别的数据
              log_warn!("第 {} 行 LYS 数据格式无法识别，已跳过: '{}'", line_number, line);
+             warning_occurred_overall = true; // 累积警告
         } // 忽略空行和元数据行
 
         // 更新进度条
@@ -1177,7 +1204,7 @@ fn convert_lys_to_ass(lys_path: &Path, ass_path: &Path) -> Result<bool, Conversi
 
     writer.flush()?; // 确保所有缓冲写入文件
     log_success!("{}", LYS_TO_ASS_COMPLETE); // 打印成功信息
-    Ok(false) // 返回成功
+    Ok(warning_occurred_overall) // 返回总的警告状态
 }
 
 
@@ -1599,11 +1626,11 @@ fn process_dialogue_for_qrc(line: &str, line_number: usize, warning_occurred: &m
             // 返回构建好的 QRC 行字符串
             Ok(Some(qrc_line))
         }
-        None => { // 如果 parse_ass_dialogue_line 返回 None (认为不是有效 Dialogue 行)
-             log_warn!("第 {} 行看起来像 Dialogue 但未能通过 parse_ass_dialogue_line 解析。", line_number);
-            // 返回 None 表示此 ASS 行不生成对应的 QRC 输出行
-            Ok(None)
-        }
+        None => { // ASS_DIALOGUE_REGEX 未匹配但行以 "Dialogue:" 开头
+        log_warn!("第 {} 行看起来像 Dialogue 但未能通过 parse_ass_dialogue_line 解析。", line_number);
+        *warning_occurred = true;
+        Ok(None)
+    }
     } // end match parse_ass_dialogue_line
 }
 
@@ -1621,26 +1648,25 @@ fn calculate_lys_property(
     current_dialogue: &ParsedDialogue,
     previous_dialogue: Option<&ParsedDialogue>,
     last_calculated_property: usize,
-) -> usize {
-    // 1. 获取当前行的 Name 字段分类
-    let current_category = map_ass_name_to_category(current_dialogue.name.as_deref());
+) -> (usize, bool) {
+    // 获取当前行的 Name 字段分类，并捕获是否发生警告
+    let (current_category, map_warned) = map_ass_name_to_category(current_dialogue.name.as_deref());
 
     // 2. 根据当前行的分类决定 LYS 属性
-    match current_category {
+    let property = match current_category {
         // LeftV1 分类 (包括空, v1, 左, None) -> 映射为无背景左对齐
         AssNameCategory::LeftV1 => LYS_PROPERTY_NO_BACK_LEFT,
-
+        
         // RightV2 分类 (包括右, v2, x-duet, x-anti) -> 映射为无背景右对齐
         AssNameCategory::RightV2 => LYS_PROPERTY_NO_BACK_RIGHT,
 
         // Background 分类 (包括背, x-bg) -> 需要根据上一行决定具体属性
         AssNameCategory::Background => {
             // 获取上一行的 Name 字段分类 (如果不存在上一行，则视为 Other)
-            let previous_category = previous_dialogue
-                .map(|prev| map_ass_name_to_category(prev.name.as_deref()))
+             let previous_category = previous_dialogue
+                .map(|prev| map_ass_name_to_category(prev.name.as_deref()).0) // 只取类别，忽略内部警告（已由map_warned捕获）
                 .unwrap_or(AssNameCategory::Other); // 没有前一行时，默认前一行为 Other
 
-            // 根据上一行的分类决定当前行的 '背' 属性
             match previous_category {
                 AssNameCategory::LeftV1 => LYS_PROPERTY_BACK_LEFT, // 前一行是 LeftV1 -> 有背景左
                 AssNameCategory::RightV2 => LYS_PROPERTY_BACK_RIGHT, // 前一行是 RightV2 -> 有背景右
@@ -1648,10 +1674,11 @@ fn calculate_lys_property(
                 AssNameCategory::Other => LYS_PROPERTY_BACK_UNSET, // 前一行是 Other -> 有背景未定左右
             }
         }
-
+        
         // Other 分类 -> 映射为未设置属性
         AssNameCategory::Other => LYS_PROPERTY_UNSET,
-    }
+    };
+    (property, map_warned) // 返回计算的属性和map_ass_name_to_category的警告状态
 }
 
 /// 将从 ASS 解析出的 Name 字段 (Option<&str>) 映射到对应的内部逻辑分类 `AssNameCategory`。
@@ -1679,34 +1706,33 @@ fn calculate_lys_property(
 ///    - "背" 或 "x-bg" -> `AssNameCategory::Background`
 /// 5. 如果 `first_part` 不匹配任何已知关键字，则记录一条警告日志，并将该 `Name` 字段归类为 `AssNameCategory::Other`。
 ///    这适用于如 "路人甲" 或其他非预定义 Actor 名称的情况。
-fn map_ass_name_to_category(name_opt: Option<&str>) -> AssNameCategory {
+fn map_ass_name_to_category(name_opt: Option<&str>) -> (AssNameCategory, bool) {
     match name_opt {
         // 情况 1: Name 字段不存在或为空
-        None | Some("") => AssNameCategory::LeftV1,
+        None | Some("") => (AssNameCategory::LeftV1, false),
         Some(name_str) => {
             // 去除 Name 字段首尾的空格，以确保后续处理的准确性
             let trimmed_name = name_str.trim();
-
+            
             // 如果去除空格后为空字符串，也视为 LeftV1 (例如 Name 字段只包含空格)
             if trimmed_name.is_empty() {
-                return AssNameCategory::LeftV1;
+                return (AssNameCategory::LeftV1, false);
             }
 
             // 按空白字符分割 Name 字段，以分析其组成部分，特别是第一个词。
             // `.next()` 获取迭代器的第一个元素，即按空格分割后的第一个词。
             if let Some(first_part) = trimmed_name.split_whitespace().next() {
                 // 情况 4: 检查第一个词是否为已定义的类别关键字
-                if matches!(first_part, "左" | "v1") {
-                    return AssNameCategory::LeftV1;
+                if matches!(first_part, "左" | "v1" | "合" | "v1000") {
+                    return (AssNameCategory::LeftV1, false);
                 }
                 if matches!(first_part, "右" | "v2" | "x-duet" | "x-anti") {
-                    return AssNameCategory::RightV2;
+                    return (AssNameCategory::RightV2, false);
                 }
                 if matches!(first_part, "背" | "x-bg") {
-                    return AssNameCategory::Background;
+                    return (AssNameCategory::Background, false);
                 }
             }
-            
             // 情况 5: 如果 Name 字段的第一个词不匹配任何已知关键字
             // (或者 Name 字段不包含任何非空白字符，这种情况已被 trimmed_name.is_empty() 捕获)
             // 则记录警告并归类为 Other。
@@ -1714,7 +1740,7 @@ fn map_ass_name_to_category(name_opt: Option<&str>) -> AssNameCategory {
                 "遇到未定义的 ASS Name 字段值 '{}'，将按默认方式处理。",
                 name_str // 记录原始的 name_str 以便调试
             );
-            AssNameCategory::Other
+            (AssNameCategory::Other, true) // 发生警告
         }
     }
 }
@@ -1743,8 +1769,9 @@ fn milliseconds_to_lrc_time(ms: usize) -> String {
 /// # Returns
 /// * `Ok(())` - 如果提取和写入成功（即使没有找到翻译行）。
 /// * `Err(ConversionError)` - 如果发生文件读取或写入错误。
-fn extract_translations_to_lrc(ass_path: &Path) -> Result<(), ConversionError> {
+fn extract_translations_to_lrc(ass_path: &Path) -> Result<bool, ConversionError> { // 新签名
     log_info!("开始从 {:?} 提取翻译...", ass_path.file_name().unwrap_or_default());
+    let mut warning_occurred_during_extraction = false;
 
     // 使用 HashMap 存储不同语言的 LRC 行数据
     // Key: 语言代码 (String), Value: Vec<(开始时间ms, 纯文本)>
@@ -1803,6 +1830,7 @@ fn extract_translations_to_lrc(ass_path: &Path) -> Result<(), ConversionError> {
                                 Err(e) => {
                                     // 报告时间解析错误，但继续处理
                                     log_warn!("第 {} 行翻译时间解析失败: {}", line_number, e);
+                                    warning_occurred_during_extraction = true; // 设置警告标志
                                 }
                             }
                         }
@@ -1815,7 +1843,7 @@ fn extract_translations_to_lrc(ass_path: &Path) -> Result<(), ConversionError> {
     // --- 写入 LRC 文件 ---
     if translations.is_empty() {
         log_info!("在文件中未找到符合条件的翻译行。");
-        return Ok(()); // 没有翻译也是成功完成提取过程
+        return Ok(warning_occurred_during_extraction); // 即使没找到翻译，也可能之前有时间解析警告
     }
 
     let mut lrc_files_generated = 0;
@@ -1872,9 +1900,10 @@ fn extract_translations_to_lrc(ass_path: &Path) -> Result<(), ConversionError> {
         log_success!("成功生成 {} 个 LRC 翻译文件。", lrc_files_generated);
     } else {
         log_warn!("提取过程完成，但未能成功生成任何 LRC 文件（请检查错误信息）。");
+        warning_occurred_during_extraction = true; // 标记需要等待
     }
 
-    Ok(())
+    Ok(warning_occurred_during_extraction)
 }
 
 // --- 在 extract_translations_to_lrc 函数之后添加 ---
@@ -1887,8 +1916,9 @@ fn extract_translations_to_lrc(ass_path: &Path) -> Result<(), ConversionError> {
 /// # Returns
 /// * `Ok(())` - 如果提取和写入成功（即使没有找到 "roma" 行）。
 /// * `Err(ConversionError)` - 如果发生文件读取或写入错误。
-fn extract_roma_to_lrc(ass_path: &Path) -> Result<(), ConversionError> {
+fn extract_roma_to_lrc(ass_path: &Path) -> Result<bool, ConversionError> {
     log_info!("开始从 {:?} 提取罗马音 (Style: roma)...", ass_path.file_name().unwrap_or_default());
+    let mut warning_occurred_during_extraction = false;
 
     // 使用 Vec 存储罗马音行的 (开始时间ms, 纯文本)
     let mut roma_lines: Vec<(usize, String)> = Vec::new();
@@ -1934,6 +1964,7 @@ fn extract_roma_to_lrc(ass_path: &Path) -> Result<(), ConversionError> {
                         }
                         Err(e) => {
                             log_warn!("第 {} 行罗马音时间解析失败: {}", line_number, e);
+                            warning_occurred_during_extraction = true;
                         }
                     }
                 } // end if style is roma
@@ -1944,7 +1975,7 @@ fn extract_roma_to_lrc(ass_path: &Path) -> Result<(), ConversionError> {
     // --- 写入 LRC 文件 ---
     if roma_lines.is_empty() {
         log_info!("在文件中未找到 Style 为 'roma' 的行。");
-        return Ok(()); // 没有找到也是成功完成提取过程
+        return Ok(warning_occurred_during_extraction);
     }
 
     // 1. 按开始时间对行进行排序
@@ -1986,5 +2017,5 @@ fn extract_roma_to_lrc(ass_path: &Path) -> Result<(), ConversionError> {
         }
     }
 
-    Ok(())
+    Ok(warning_occurred_during_extraction)
 }
