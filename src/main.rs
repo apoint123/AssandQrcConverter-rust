@@ -277,40 +277,47 @@ fn main() {
     // 使用 clap 解析命令行参数。
     let args = CliArgs::parse();
 
-    // 检查原始命令行参数的数量
-    // std::env::args() 返回一个迭代器，第一个元素通常是程序自身的路径
-    // 如果参数数量小于等于 1，说明用户没有提供任何额外的参数（例如双击运行）
-    if std::env::args().len() <= 1 {
-        interactive_mode(); // 直接进入交互模式
-        return; // 退出程序
+    // 进入交互模式的逻辑
+    // 1. 如果明确使用了 --interactive 标志
+    // 2. 如果程序没有接收到任何参数 (通常是双击运行)
+    if args.interactive {
+        interactive_mode();
+        return;
+    }
+    if std::env::args().len() <= 1 { // 检查参数数量是否小于等于1
+        interactive_mode();
+        return;
     }
 
     // 提取 extract_lrc 标志的值，以便传递给后续函数
     let should_extract_lrc = args.extract_lrc;
 
+    // 清理从 clap 获取的输入文件路径
+    let cleaned_input_file = args.input_file.map(clean_path_buf_quotes);
+    // 清理从 clap 获取的输出文件路径
+    let cleaned_output_file = args.output_file.map(clean_path_buf_quotes);
+
     // 检查是否提供了必要的 input_file (在非交互模式下)
-    let input_path = match args.input_file {
+    let input_path = match cleaned_input_file {
         Some(path) => path,
         None => {
             // 如果 input_file 为 None 且不是交互模式，说明用户未提供输入文件
-            log_error!("错误：需要指定输入文件或使用 --interactive 选项。");
+            log_error!("错误：需要指定输入文件。");
             CliArgs::command().print_help().unwrap_or_else(|e| log_error!("无法打印帮助信息: {}", e));
-            // wait_for_exit(); // 可以选择在这里等待或直接退出
+            wait_for_exit(); // 确保暂停
             return;
         }
     };
 
     // 优先级 2: 根据 'direction' 和 'output_file' 是否存在来判断模式
-    match (args.direction, args.output_file) {
+    match (args.direction, cleaned_output_file) {
         // 组合 1: 自动模式 (direction 和 output_file 都没有提供)
         (None, None) => {
-            // 调用自动模式处理函数，并传入 extract_lrc 标志的值
             run_automatic_mode_clap(&input_path);
         }
 
         // 组合 2: 手动模式 (direction 和 output_file 都提供了)
-        (Some(dir), Some(output)) => {
-             // 调用手动模式处理函数，并传入 extract_lrc 标志的值
+        (Some(dir), Some(output)) => { // output 来自 cleaned_output_file
              run_manual_mode_clap(&dir, &input_path, &output, should_extract_lrc);
         }
 
@@ -1313,28 +1320,75 @@ fn read_user_input(prompt: &str) -> Result<String, ConversionError> {
 /// * `Ok(PathBuf)` - 用户输入的有效文件路径。
 /// * `Err(ConversionError)` - 读取或处理路径过程中发生错误。
 fn read_file_path(prompt_template: &str, extension: &str) -> Result<PathBuf, ConversionError> {
-    // 循环提示用户输入，直到获得非空路径
     loop {
-        // 调用 read_user_input 获取用户输入的路径字符串
-        let path_str = read_user_input(&prompt_template.replace("{}", extension))?;
+        // read_user_input 内部已经调用了 trim()，移除了原始输入两端的空白字符
+        let path_str_input = read_user_input(&prompt_template.replace("{}", extension))?;
+        
+        let mut current_path_slice: &str = &path_str_input;
 
-        // 清理路径字符串：去除首尾可能存在的单引号或双引号（常见于拖放文件操作）
-        let cleaned_path_str = path_str
-            .strip_prefix('"').unwrap_or(&path_str) // 尝试移除前导双引号
-            .strip_suffix('"').unwrap_or(&path_str) // 尝试移除后置双引号
-            .strip_prefix('\'').unwrap_or(&path_str) // 尝试移除前导单引号
-            .strip_suffix('\'').unwrap_or(&path_str); // 尝试移除后置单引号
+        // 迭代移除成对的引号，直到不再有变化或者字符串长度不足以包含引号
+        loop {
+            let len_before_strip = current_path_slice.len();
+            if len_before_strip >= 2 { // 必须至少有两个字符才能构成一对引号
+                if current_path_slice.starts_with('"') && current_path_slice.ends_with('"') {
+                    current_path_slice = &current_path_slice[1..len_before_strip - 1];
+                } else if current_path_slice.starts_with('\'') && current_path_slice.ends_with('\'') {
+                    current_path_slice = &current_path_slice[1..len_before_strip - 1];
+                } else {
+                    // 如果两端不是匹配的同类型引号，则停止剥离
+                    break;
+                }
+            } else {
+                // 长度不足2，不可能有成对引号
+                break;
+            }
 
-        // 检查清理后的路径是否为空
-        if cleaned_path_str.is_empty() {
-            // 如果为空，打印错误信息并重新开始循环
-            let formatted_msg = format!("{} {}", EMPTY_FILE_PATH_ERROR, extension);
+            // 如果本次迭代没有改变长度，说明没有更多可剥离的成对引号
+            if current_path_slice.len() == len_before_strip {
+                break;
+            }
+        }
+
+        if current_path_slice.is_empty() {
+            let formatted_msg = format!("{} {}", EMPTY_FILE_PATH_ERROR.replace("{}", ""), extension); // 确保 {} 被替换
             log_error!("{}", formatted_msg);
             continue;
         }
+        return Ok(PathBuf::from(current_path_slice.to_owned())); // 使用处理后的字符串创建 PathBuf
+    }
+}
 
-        // 如果路径非空，则将其转换为 PathBuf 并返回
-        return Ok(PathBuf::from(cleaned_path_str));
+/// 辅助函数：清理 PathBuf 中可能包含的、包裹整个路径的引号。
+fn clean_path_buf_quotes(path_buf: PathBuf) -> PathBuf {
+    let path_str_cow = path_buf.to_string_lossy(); // Cow<'a, str>
+
+    let mut current_path_slice: &str = path_str_cow.as_ref();
+    let original_len = current_path_slice.len();
+
+    loop {
+        let len_before_strip = current_path_slice.len();
+        if len_before_strip >= 2 {
+            if current_path_slice.starts_with('"') && current_path_slice.ends_with('"') {
+                current_path_slice = &current_path_slice[1..len_before_strip - 1];
+            } else if current_path_slice.starts_with('\'') && current_path_slice.ends_with('\'') {
+                current_path_slice = &current_path_slice[1..len_before_strip - 1];
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+        if current_path_slice.len() == len_before_strip {
+            break;
+        }
+    }
+
+    // 仅当字符串内容确实发生了改变时（即引号被移除了），才创建新的 PathBuf
+    // 否则，返回原始的 PathBuf 以避免不必要的分配和潜在的 non-UTF8 路径信息的丢失。
+    if current_path_slice.len() < original_len {
+        PathBuf::from(current_path_slice.to_owned())
+    } else {
+        path_buf // 没有变化，返回原始 PathBuf
     }
 }
 
